@@ -1,81 +1,84 @@
 """
-Debug script — prints raw API responses for chains with suspicious
-or errored output, so we can fix based on real data instead of guesses.
+Debug script — prints the raw API response for each live cold wallet chain,
+so problems can be fixed based on real data instead of guesses.
+
+Reads addresses from addresses.csv, so it always checks the same wallets
+the report uses. Uses the same endpoints as balance_fetchers.py.
+
+Usage:
+    python debug_balances.py                  # all chains
+    python debug_balances.py icp vechain      # only these network_ids
+
+To test a new chain before writing its fetcher, add a function to RAW_CALLS
+below with the same network_id you will use in addresses.csv.
 """
 
+import csv
 import json
+import sys
 import requests
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (ColdWalletBot/1.0)"}
 
-ADDR = {
-    "EGLD": "erd10u3n46rkewzp9nqfnsx7vruz68vnvcfdwlsq38gysrf55z3ef7as54860a",
-    "ICP":  "fe3e9427110f728a864c0cfa091126fa42897bc55fe4b8aca7df8fe21b040555",
-    "NEO":  "Ncby6iv4U7F3pu8ErzBzfbGXmsPeq2XF6s",
-    "STX":  "SP2RJJJYGANXRWZ9REH87E6MFXJQSV81JJHX34KD3",
-    "SUI":  "0x8df8a81cf24f66f1ff2b22b5f091ccad944cc3499823b7b5d44e2b718b00de58",
-    "VET":  "0x52e81a1f8c917987c28da71B4c84eb51cc3Cd3a9",
-    "XNO":  "nano_1c8j1h5ujzgefuezziffeksy39xrcj84d4neo6eyhx1ze858ogikgmxhmeyq",
+
+def raw_aptos(address):
+    payload = {
+        "function": "0x1::coin::balance",
+        "type_arguments": ["0x1::aptos_coin::AptosCoin"],
+        "arguments": [address],
+    }
+    return requests.post("https://fullnode.mainnet.aptoslabs.com/v1/view",
+                         json=payload, headers=HEADERS, timeout=25)
+
+
+def raw_arweave(address):
+    return requests.get(f"https://arweave.net/wallet/{address}/balance",
+                        headers=HEADERS, timeout=25)
+
+
+def raw_icp(address):
+    return requests.get(f"https://ledger-api.internetcomputer.org/accounts/{address}",
+                        headers=HEADERS, timeout=25)
+
+
+def raw_vechain(address):
+    return requests.get(f"https://mainnet.vecha.in/accounts/{address}",
+                        headers=HEADERS, timeout=25)
+
+
+RAW_CALLS = {
+    "aptos":   raw_aptos,
+    "arweave": raw_arweave,
+    "icp":     raw_icp,
+    "vechain": raw_vechain,
 }
 
 
 def show(label, resp):
-    print(f"\n===== {label} =====")
-    print(json.dumps(resp, indent=2)[:1500])
+    print(f"\n===== {label} (HTTP {resp.status_code}) =====")
+    try:
+        print(json.dumps(resp.json(), indent=2)[:1500])
+    except ValueError:
+        print(resp.text[:1500])
 
 
 def main():
-    # EGLD
-    try:
-        r = requests.get(f"https://api.multiversx.com/accounts/{ADDR['EGLD']}", headers=HEADERS, timeout=25)
-        show("EGLD", r.json())
-    except Exception as e:
-        print(f"\n===== EGLD ERROR =====\n{e}")
+    only = {a.lower() for a in sys.argv[1:]}
+    with open("addresses.csv", newline="", encoding="utf-8") as f:
+        rows = [{k: (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
 
-    # ICP
-    try:
-        r = requests.get(f"https://ledger-api.internetcomputer.org/accounts/{ADDR['ICP']}", headers=HEADERS, timeout=25)
-        show("ICP", r.json())
-    except Exception as e:
-        print(f"\n===== ICP ERROR =====\n{e}")
-
-    # NEO
-    try:
-        payload = {"jsonrpc": "2.0", "method": "getnep17balances", "params": [ADDR["NEO"]], "id": 1}
-        r = requests.post("https://mainnet1.neo.coz.io:443", json=payload, headers=HEADERS, timeout=25)
-        show("NEO", r.json())
-    except Exception as e:
-        print(f"\n===== NEO ERROR =====\n{e}")
-
-    # STX
-    try:
-        r = requests.get(f"https://api.hiro.so/extended/v1/address/{ADDR['STX']}/balances", headers=HEADERS, timeout=25)
-        show("STX", r.json())
-    except Exception as e:
-        print(f"\n===== STX ERROR =====\n{e}")
-
-    # SUI
-    try:
-        payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [ADDR["SUI"]]}
-        r = requests.post("https://fullnode.mainnet.sui.io:443", json=payload, headers=HEADERS, timeout=25)
-        show("SUI", r.json())
-    except Exception as e:
-        print(f"\n===== SUI ERROR =====\n{e}")
-
-    # VET
-    try:
-        r = requests.get(f"https://mainnet.vecha.in/accounts/{ADDR['VET']}", headers=HEADERS, timeout=25)
-        show("VET", r.json())
-    except Exception as e:
-        print(f"\n===== VET ERROR =====\n{e}")
-
-    # XNO
-    try:
-        payload = {"action": "account_balance", "account": ADDR["XNO"]}
-        r = requests.post("https://rpc.nano-gpt.com", json=payload, headers=HEADERS, timeout=25)
-        show("XNO", r.json())
-    except Exception as e:
-        print(f"\n===== XNO ERROR =====\n{e}")
+    for row in rows:
+        net, sym, addr = row["network_id"], row["symbol"], row["address"]
+        if only and net not in only:
+            continue
+        call = RAW_CALLS.get(net)
+        if call is None:
+            print(f"\n===== {sym} ({net}) =====\nNo raw call defined for this network_id.")
+            continue
+        try:
+            show(f"{sym} ({net})", call(addr))
+        except Exception as e:
+            print(f"\n===== {sym} ({net}) ERROR =====\n{e}")
 
 
 if __name__ == "__main__":
