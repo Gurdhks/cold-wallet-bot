@@ -1,6 +1,6 @@
 """
 Balance fetcher for cold-wallet-bot addresses.
-Covers: APT, AR, ICP, SUI, VET
+Covers: APT, AR, ICP, VET
 """
 
 import requests
@@ -53,27 +53,6 @@ def get_icp_balance(account_id: str) -> float:
     return e8s / 1e8
 
 
-# ── SUI ──────────────────────────────────────────────────────────────────────
-
-def get_sui_balance(address: str) -> float:
-    query = """
-    query GetBalance($owner: SuiAddress!) {
-      address(address: $owner) {
-        balance(type: "0x2::sui::SUI") {
-          totalBalance
-        }
-      }
-    }
-    """
-    payload = {"query": query, "variables": {"owner": address}}
-    out = safe_post_json("https://sui-mainnet.mystenlabs.com/graphql", payload)
-    if "errors" in out:
-        raise RuntimeError(f"Sui GraphQL error: {out['errors']}")
-    bal = out["data"]["address"]["balance"]
-    mist = int(bal["totalBalance"]) if bal else 0
-    return mist / 1e9
-
-
 # ── VET (VeChain) ────────────────────────────────────────────────────────────
 
 def get_vet_balance(address: str) -> float:
@@ -87,6 +66,5 @@ BALANCE_FETCHERS = {
     "aptos":   get_apt_balance,
     "arweave": get_ar_balance,
     "icp":     get_icp_balance,
-    "sui":     get_sui_balance,
     "vechain": get_vet_balance,
 }
